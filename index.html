@@ -965,7 +965,743 @@
   <div id="toast-container" aria-live="assertive" aria-atomic="true"></div>
 
   <script>
-    // JavaScript — added in next chunk
+    'use strict';
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 1 — DATA LAYER
+    ═══════════════════════════════════════════════════════ */
+    const STORAGE_KEY = 'daily-flow-v1';
+
+    function loadData() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (_) {}
+      return { tasks: {}, quickTasks: { todo: [], done: [] } };
+    }
+
+    function saveData() {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (_) {}
+    }
+
+    function getDateKey(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    function ensureDate(key) {
+      if (!data.tasks[key]) data.tasks[key] = { todo: [], done: [] };
+    }
+
+    function genId() {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return Date.now().toString(36) + Math.random().toString(36).slice(2);
+    }
+
+    let data = loadData();
+    const todayKey = getDateKey(new Date());
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 2 — STATS
+    ═══════════════════════════════════════════════════════ */
+    function computeStreak() {
+      let streak = 0;
+      const base = new Date();
+      for (let i = 0; i < 365; i++) {
+        const d = new Date(base);
+        d.setDate(base.getDate() - i);
+        const key = getDateKey(d);
+        const done = data.tasks[key]?.done ?? [];
+        if (done.length > 0) {
+          streak++;
+        } else if (i > 0) {
+          break; // gap found — streak ends
+        }
+        // i===0 (today) with 0 done: don't break, streak might still be from yesterday
+      }
+      // If today has 0 done but yesterday does, streak is from yesterday
+      const todayDone = data.tasks[todayKey]?.done?.length ?? 0;
+      if (todayDone === 0 && streak > 0) streak = 0; // haven't earned today yet; count from yesterday
+      // Recount excluding today if today has 0
+      if (todayDone === 0) {
+        streak = 0;
+        for (let i = 1; i < 365; i++) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const key = getDateKey(d);
+          const done = data.tasks[key]?.done ?? [];
+          if (done.length > 0) streak++;
+          else break;
+        }
+      }
+      return streak;
+    }
+
+    function getTodayDoneCount() {
+      return data.tasks[todayKey]?.done?.length ?? 0;
+    }
+
+    function getTotalDoneCount() {
+      let t = data.quickTasks.done.length;
+      for (const key of Object.keys(data.tasks)) t += data.tasks[key].done.length;
+      return t;
+    }
+
+    function renderStats() {
+      const streak = computeStreak();
+      const todayDone = getTodayDoneCount();
+      const total = getTotalDoneCount();
+
+      const sv = document.getElementById('streak-value');
+      const tv = document.getElementById('today-value');
+      const ov = document.getElementById('total-value');
+
+      // Animate value change (quick pop)
+      const bump = el => { el.style.transform = 'scale(1.35)'; setTimeout(() => el.style.transform = '', 300); };
+      if (sv.textContent !== String(streak))  { sv.textContent = streak;    bump(sv); }
+      if (tv.textContent !== String(todayDone)){ tv.textContent = todayDone; bump(tv); }
+      if (ov.textContent !== String(total))   { ov.textContent = total;     bump(ov); }
+
+      const streakEl = document.getElementById('stat-streak');
+      streakEl.classList.toggle('active', streak > 0);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 3 — PARTICLE ENGINE
+    ═══════════════════════════════════════════════════════ */
+    const pCanvas = document.getElementById('particles-canvas');
+    const pCtx    = pCanvas.getContext('2d');
+    let   pList   = [];
+    let   pRafId  = null;
+
+    const P_COLORS = ['#7c3aed','#a78bfa','#06b6d4','#10b981','#f59e0b','#ec4899','#ffffff','#f87171'];
+    const Q_COLORS = ['#f59e0b','#fbbf24','#ec4899','#f87171','#fb923c','#ffffff'];
+
+    function resizeCanvas() {
+      pCanvas.width  = window.innerWidth;
+      pCanvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    class Particle {
+      constructor(x, y, palette) {
+        this.x = x; this.y = y;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 13 + 4;
+        this.vx = Math.cos(angle) * speed;
+        this.vy = Math.sin(angle) * speed - (Math.random() * 6 + 2);
+        this.gravity  = 0.3;
+        this.drag     = 0.975;
+        this.rotation = Math.random() * Math.PI * 2;
+        this.rotVel   = (Math.random() - 0.5) * 0.22;
+        this.size     = Math.random() * 7 + 3;
+        this.color    = palette[Math.floor(Math.random() * palette.length)];
+        this.shape    = Math.floor(Math.random() * 4); // 0 circle 1 square 2 star 3 streak
+        this.life     = 1;
+        this.decay    = Math.random() * 0.018 + 0.011;
+      }
+
+      update() {
+        this.vx *= this.drag;
+        this.vy  = this.vy * this.drag + this.gravity;
+        this.x  += this.vx;
+        this.y  += this.vy;
+        this.rotation += this.rotVel;
+        this.life -= this.decay;
+      }
+
+      draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.fillStyle   = this.color;
+        ctx.strokeStyle = this.color;
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        switch (this.shape) {
+          case 0: // circle
+            ctx.beginPath();
+            ctx.arc(0, 0, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+          case 1: // square
+            ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
+            break;
+          case 2: // 5-point star
+            ctx.beginPath();
+            for (let i = 0; i < 10; i++) {
+              const r = i % 2 === 0 ? this.size : this.size * 0.42;
+              const a = (Math.PI / 5) * i - Math.PI / 2;
+              i === 0 ? ctx.moveTo(r * Math.cos(a), r * Math.sin(a))
+                      : ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
+            }
+            ctx.closePath();
+            ctx.fill();
+            break;
+          case 3: // streak (thin elongated rect, oriented along velocity)
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-this.size * 1.5, 0);
+            ctx.lineTo( this.size * 1.5, 0);
+            ctx.stroke();
+            break;
+        }
+        ctx.restore();
+      }
+    }
+
+    function spawnParticles(x, y, count, palette) {
+      palette = palette || P_COLORS;
+      for (let i = 0; i < count; i++) pList.push(new Particle(x, y, palette));
+      if (!pRafId) pRafId = requestAnimationFrame(particleLoop);
+    }
+
+    function particleLoop() {
+      pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+      pList = pList.filter(p => p.life > 0);
+      for (const p of pList) { p.update(); p.draw(pCtx); }
+      pRafId = pList.length > 0 ? requestAnimationFrame(particleLoop) : null;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 4 — SOUND ENGINE
+    ═══════════════════════════════════════════════════════ */
+    let audioCtx = null;
+
+    function ensureAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playNote(freq, startTime, duration, type, gainVal) {
+      type    = type    || 'sine';
+      gainVal = gainVal || 0.25;
+      const osc  = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, startTime);
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(gainVal, startTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+      osc.start(startTime);
+      osc.stop(startTime + duration + 0.05);
+    }
+
+    function playCompleteSound() {
+      ensureAudio();
+      const t = audioCtx.currentTime;
+      // C-major arpeggio: C5 E5 G5 C6
+      [[523.25, 0], [659.25, 0.1], [783.99, 0.2], [1046.5, 0.3]].forEach(([f, dt]) => {
+        playNote(f,      t + dt, 0.55, 'sine', 0.22);
+        playNote(f * 2,  t + dt, 0.35, 'sine', 0.07); // harmonic
+      });
+      playNote(1568, t + 0.42, 0.45, 'sine', 0.12); // sparkle tail
+    }
+
+    function playQuickCompleteSound() {
+      ensureAudio();
+      const t = audioCtx.currentTime;
+      // Snappy sawtooth whoosh → rising sines
+      playNote(300,  t,       0.06, 'sawtooth', 0.08);
+      playNote(600,  t + 0.06,0.07, 'sawtooth', 0.1);
+      playNote(1200, t + 0.12,0.1,  'sine',     0.18);
+      playNote(1600, t + 0.18,0.38, 'sine',     0.22);
+      playNote(2000, t + 0.24,0.35, 'sine',     0.13);
+    }
+
+    function playAddSound() {
+      ensureAudio();
+      const t = audioCtx.currentTime;
+      playNote(330, t, 0.18, 'sine', 0.12); // E4
+    }
+
+    function playAllDoneSound() {
+      ensureAudio();
+      const t = audioCtx.currentTime;
+      // C5 E5 G5 E5 G5 C6 — fanfare
+      [[523,0],[659,0.12],[784,0.24],[659,0.36],[784,0.48],[1047,0.60]].forEach(([f,dt]) => {
+        playNote(f, t + dt, 0.55, 'sine', 0.2);
+      });
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 5 — TOAST NOTIFICATIONS
+    ═══════════════════════════════════════════════════════ */
+    const TOAST_MSGS = [
+      '🔥 Keep crushing it!', '⚡ You\'re on fire!', '🚀 Momentum!',
+      '💪 That\'s the spirit!', '🎯 Bulls-eye!', '✨ Fantastic!',
+      '💫 Unstoppable!', '🌟 One down!', '👊 Let\'s go!',
+    ];
+    const QUICK_MSGS = [
+      '⚡ Zap! Done!', '🏃 Quick win!', '💨 Speed run!',
+      '🎯 Handled!', '⚡ Boom!', '🚀 Fast & focused!',
+    ];
+
+    function showToast(msg) {
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.textContent = msg;
+      document.getElementById('toast-container').appendChild(el);
+      setTimeout(() => {
+        el.classList.add('exit');
+        setTimeout(() => el.remove(), 320);
+      }, 2600);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 6 — CALENDAR
+    ═══════════════════════════════════════════════════════ */
+    const MONTH_NAMES = ['January','February','March','April','May','June',
+                         'July','August','September','October','November','December'];
+    const DOW_NAMES   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+    let currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(0, 0, 0, 0);
+
+    let selectedDate = new Date();
+
+    function renderCalendar() {
+      const year  = currentMonth.getFullYear();
+      const month = currentMonth.getMonth();
+
+      document.getElementById('cal-month-label').textContent = `${MONTH_NAMES[month]} ${year}`;
+
+      const grid   = document.getElementById('calendar-grid');
+      grid.innerHTML = '';
+
+      // Day-of-week headers
+      DOW_NAMES.forEach(name => {
+        const el = document.createElement('div');
+        el.className   = 'cal-dow';
+        el.textContent = name;
+        el.setAttribute('aria-hidden', 'true');
+        grid.appendChild(el);
+      });
+
+      const firstDow     = new Date(year, month, 1).getDay();
+      const daysInMonth  = new Date(year, month + 1, 0).getDate();
+      const today        = new Date();
+      const selectedKey  = getDateKey(selectedDate);
+
+      // Blank offset cells
+      for (let i = 0; i < firstDow; i++) {
+        const blank = document.createElement('div');
+        blank.className = 'cal-cell empty';
+        grid.appendChild(blank);
+      }
+
+      // Day cells
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = new Date(year, month, d);
+        const key  = getDateKey(date);
+        const cell = document.createElement('div');
+        cell.className = 'cal-cell';
+        cell.setAttribute('role', 'gridcell');
+        cell.setAttribute('tabindex', '0');
+        cell.setAttribute('aria-label', date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }));
+
+        if (date.toDateString() === today.toDateString()) cell.classList.add('today');
+        if (key === selectedKey)                          cell.classList.add('selected');
+
+        const numEl = document.createElement('span');
+        numEl.textContent = d;
+        cell.appendChild(numEl);
+
+        // Dots
+        const dayData = data.tasks[key];
+        if (dayData) {
+          const todoCount = dayData.todo.length;
+          const doneCount = dayData.done.length;
+          if (todoCount + doneCount > 0) {
+            const dots = document.createElement('div');
+            dots.className = 'day-dots';
+            if (doneCount > 0 && todoCount === 0) {
+              const dot = document.createElement('div');
+              dot.className = 'dot green';
+              dots.appendChild(dot);
+            } else {
+              if (doneCount > 0) { const d2 = document.createElement('div'); d2.className = 'dot green'; dots.appendChild(d2); }
+              if (todoCount > 0) { const d3 = document.createElement('div'); d3.className = 'dot amber'; dots.appendChild(d3); }
+            }
+            cell.appendChild(dots);
+          }
+        }
+
+        cell.addEventListener('click', () => selectDate(date));
+        cell.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') selectDate(date); });
+        grid.appendChild(cell);
+      }
+    }
+
+    function selectDate(date) {
+      selectedDate = new Date(date);
+      renderCalendar();
+      renderTaskPanel();
+    }
+
+    function prevMonth() {
+      currentMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1);
+      renderCalendar();
+    }
+
+    function nextMonth() {
+      currentMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1);
+      renderCalendar();
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 7 — TASK PANEL
+    ═══════════════════════════════════════════════════════ */
+    function renderTaskPanel() {
+      const key = getDateKey(selectedDate);
+      ensureDate(key);
+      const { todo, done } = data.tasks[key];
+
+      // Show content, hide empty state
+      document.getElementById('panel-empty-state').style.display = 'none';
+      document.getElementById('panel-content').removeAttribute('hidden');
+
+      // Date title
+      document.getElementById('panel-date-title').textContent =
+        selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+      // Progress bar
+      const total = todo.length + done.length;
+      const pct   = total === 0 ? 0 : Math.round((done.length / total) * 100);
+      document.getElementById('panel-progress-fill').style.width  = `${pct}%`;
+      document.getElementById('panel-progress-label').textContent =
+        total === 0 ? 'No tasks yet' : `${done.length} of ${total} done — ${pct}%`;
+
+      // To Do list
+      const todoList  = document.getElementById('panel-todo-list');
+      const todoEmpty = document.getElementById('panel-todo-empty');
+      todoList.innerHTML = '';
+      if (todo.length === 0) {
+        todoEmpty.removeAttribute('hidden');
+      } else {
+        todoEmpty.setAttribute('hidden', '');
+        todo.forEach(task => todoList.appendChild(makeTodoItem(task, key)));
+      }
+
+      // Done list
+      const doneList  = document.getElementById('panel-done-list');
+      const doneEmpty = document.getElementById('panel-done-empty');
+      doneList.innerHTML = '';
+      if (done.length === 0) {
+        doneEmpty.removeAttribute('hidden');
+      } else {
+        doneEmpty.setAttribute('hidden', '');
+        done.forEach(task => doneList.appendChild(makeDoneItem(task)));
+      }
+    }
+
+    function makeTodoItem(task, dateKey) {
+      const li = document.createElement('li');
+      li.className = 'task-item';
+      li.dataset.id = task.id;
+
+      const check = document.createElement('div');
+      check.className = 'task-check';
+
+      const text = document.createElement('span');
+      text.className = 'task-text';
+      text.textContent = task.text;
+
+      const hint = document.createElement('span');
+      hint.className = 'task-hint';
+      hint.textContent = 'tap to complete';
+
+      li.appendChild(check);
+      li.appendChild(text);
+      li.appendChild(hint);
+
+      li.addEventListener('click', () => completeTask(dateKey, task.id, li));
+      li.setAttribute('tabindex', '0');
+      li.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') completeTask(dateKey, task.id, li); });
+
+      return li;
+    }
+
+    function makeDoneItem(task) {
+      const li = document.createElement('li');
+      li.className = 'task-item done-item';
+
+      const check = document.createElement('div');
+      check.className = 'task-check';
+      check.textContent = '✓';
+
+      const text = document.createElement('span');
+      text.className = 'task-text';
+      text.textContent = task.text;
+
+      li.appendChild(check);
+      li.appendChild(text);
+      return li;
+    }
+
+    function addTask() {
+      const input = document.getElementById('panel-add-input');
+      const text  = input.value.trim();
+      if (!text) return;
+
+      const key = getDateKey(selectedDate);
+      ensureDate(key);
+      data.tasks[key].todo.push({ id: genId(), text, createdAt: Date.now() });
+      saveData();
+      input.value = '';
+      playAddSound();
+      renderTaskPanel();
+      renderCalendar();
+      renderStats();
+
+      // Animate the newly added item
+      const list = document.getElementById('panel-todo-list');
+      const last = list.lastElementChild;
+      if (last) { last.classList.add('appearing'); last.addEventListener('animationend', () => last.classList.remove('appearing'), { once: true }); }
+    }
+
+    function completeTask(dateKey, taskId, liEl) {
+      // Particle burst from element center
+      const rect = liEl.getBoundingClientRect();
+      const cx = rect.left + rect.width  / 2;
+      const cy = rect.top  + rect.height / 2;
+      spawnParticles(cx, cy, 72, P_COLORS);
+      playCompleteSound();
+
+      liEl.classList.add('completing');
+
+      setTimeout(() => {
+        const day = data.tasks[dateKey];
+        if (!day) return;
+        const idx = day.todo.findIndex(t => t.id === taskId);
+        if (idx === -1) return;
+        const [task] = day.todo.splice(idx, 1);
+        task.completedAt = Date.now();
+        day.done.unshift(task); // newest at top
+        saveData();
+        renderTaskPanel();
+        renderCalendar();
+        renderStats();
+
+        if (day.todo.length === 0 && day.done.length > 0) {
+          setTimeout(triggerAllDoneCelebration, 150);
+        } else {
+          showToast(TOAST_MSGS[Math.floor(Math.random() * TOAST_MSGS.length)]);
+        }
+      }, 490);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 8 — ALL-DONE CELEBRATION
+    ═══════════════════════════════════════════════════════ */
+    function triggerAllDoneCelebration() {
+      // Overlay text
+      const overlay = document.createElement('div');
+      overlay.id = 'all-done-overlay';
+      const txt = document.createElement('div');
+      txt.id = 'all-done-text';
+      txt.textContent = '🎉 All Done!';
+      overlay.appendChild(txt);
+      document.body.appendChild(overlay);
+      setTimeout(() => overlay.remove(), 3400);
+
+      // Particle burst — center + corners
+      const W = window.innerWidth, H = window.innerHeight;
+      spawnParticles(W / 2, H / 2, 90,  P_COLORS);
+      spawnParticles(0,     0,     25,  P_COLORS);
+      spawnParticles(W,     0,     25,  P_COLORS);
+      spawnParticles(0,     H,     25,  P_COLORS);
+      spawnParticles(W,     H,     25,  P_COLORS);
+
+      playAllDoneSound();
+      showToast('🏆 Perfect day! All tasks done!');
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 9 — QUICK TASKS
+    ═══════════════════════════════════════════════════════ */
+    const BANNERS = [
+      'If it takes less than 2 minutes — do it now!',
+      '🔥 Small wins build big momentum.',
+      '⚡ Clear the clutter. Free your mind.',
+      '🎯 Two minutes is all it takes.',
+      '💪 One quick task at a time.',
+      '🚀 You\'re on a roll — keep going!',
+      '✨ Every small task done is energy gained.',
+    ];
+
+    function renderQuickTasks() {
+      const streak = computeStreak();
+      const total  = getTotalDoneCount();
+      const idx    = Math.floor((streak + total) / 3) % BANNERS.length;
+      document.getElementById('motivational-banner').textContent = BANNERS[idx];
+
+      const { todo, done } = data.quickTasks;
+
+      // To Do
+      const todoList  = document.getElementById('quick-todo-list');
+      const todoEmpty = document.getElementById('quick-todo-empty');
+      todoList.innerHTML = '';
+      if (todo.length === 0) {
+        todoEmpty.removeAttribute('hidden');
+      } else {
+        todoEmpty.setAttribute('hidden', '');
+        todo.forEach(task => todoList.appendChild(makeQuickTodoItem(task)));
+      }
+
+      // Done
+      const doneList  = document.getElementById('quick-done-list');
+      const doneEmpty = document.getElementById('quick-done-empty');
+      doneList.innerHTML = '';
+      if (done.length === 0) {
+        doneEmpty.removeAttribute('hidden');
+      } else {
+        doneEmpty.setAttribute('hidden', '');
+        done.forEach(task => doneList.appendChild(makeQuickDoneItem(task)));
+      }
+    }
+
+    function makeQuickTodoItem(task) {
+      const li = document.createElement('li');
+      li.className = 'task-item quick-item';
+      li.dataset.id = task.id;
+
+      const check = document.createElement('div');
+      check.className = 'task-check';
+
+      const text = document.createElement('span');
+      text.className = 'task-text';
+      text.textContent = task.text;
+
+      const badge = document.createElement('span');
+      badge.className = 'timer-badge';
+      badge.textContent = '⏱ 2 min';
+
+      li.appendChild(check);
+      li.appendChild(text);
+      li.appendChild(badge);
+
+      li.addEventListener('click', () => completeQuickTask(task.id, li));
+      li.setAttribute('tabindex', '0');
+      li.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') completeQuickTask(task.id, li); });
+
+      return li;
+    }
+
+    function makeQuickDoneItem(task) {
+      const li = document.createElement('li');
+      li.className = 'task-item done-item';
+
+      const check = document.createElement('div');
+      check.className = 'task-check';
+      check.textContent = '✓';
+
+      const text = document.createElement('span');
+      text.className = 'task-text';
+      text.textContent = task.text;
+
+      li.appendChild(check);
+      li.appendChild(text);
+      return li;
+    }
+
+    function addQuickTask() {
+      const input = document.getElementById('quick-add-input');
+      const text  = input.value.trim();
+      if (!text) return;
+
+      data.quickTasks.todo.push({ id: genId(), text, createdAt: Date.now() });
+      saveData();
+      input.value = '';
+      playAddSound();
+      renderQuickTasks();
+      renderStats();
+
+      const list = document.getElementById('quick-todo-list');
+      const last = list.lastElementChild;
+      if (last) { last.classList.add('appearing'); last.addEventListener('animationend', () => last.classList.remove('appearing'), { once: true }); }
+    }
+
+    function completeQuickTask(taskId, liEl) {
+      const rect = liEl.getBoundingClientRect();
+      const cx = rect.left + rect.width  / 2;
+      const cy = rect.top  + rect.height / 2;
+      spawnParticles(cx, cy, 55, Q_COLORS);
+      playQuickCompleteSound();
+
+      liEl.classList.add('completing');
+
+      setTimeout(() => {
+        const idx = data.quickTasks.todo.findIndex(t => t.id === taskId);
+        if (idx === -1) return;
+        const [task] = data.quickTasks.todo.splice(idx, 1);
+        task.completedAt = Date.now();
+        data.quickTasks.done.unshift(task);
+        saveData();
+        renderQuickTasks();
+        renderStats();
+
+        if (data.quickTasks.todo.length === 0 && data.quickTasks.done.length > 0) {
+          setTimeout(() => {
+            const W = window.innerWidth, H = window.innerHeight;
+            spawnParticles(W / 2, H / 2, 80, Q_COLORS);
+            showToast('⚡ All quick tasks blasted!');
+            playAllDoneSound();
+          }, 150);
+        } else {
+          showToast(QUICK_MSGS[Math.floor(Math.random() * QUICK_MSGS.length)]);
+        }
+      }, 490);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 10 — TAB SWITCHING
+    ═══════════════════════════════════════════════════════ */
+    function switchTab(name) {
+      document.querySelectorAll('.tab-panel').forEach(p => {
+        p.classList.remove('active');
+        p.setAttribute('hidden', '');
+      });
+      document.querySelectorAll('.tab-btn').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
+
+      const panel = document.getElementById(`tab-${name}`);
+      const btn   = document.getElementById(`tab-btn-${name}`);
+      panel.classList.add('active');
+      panel.removeAttribute('hidden');
+      btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
+
+      if (name === 'quicktasks') renderQuickTasks();
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       MODULE 11 — INIT
+    ═══════════════════════════════════════════════════════ */
+    document.addEventListener('DOMContentLoaded', () => {
+      // Wire month navigation
+      document.getElementById('cal-prev').addEventListener('click', prevMonth);
+      document.getElementById('cal-next').addEventListener('click', nextMonth);
+
+      // Wire Enter keys on inputs
+      document.getElementById('panel-add-input').addEventListener('keydown', e => { if (e.key === 'Enter') addTask(); });
+      document.getElementById('quick-add-input').addEventListener('keydown', e => { if (e.key === 'Enter') addQuickTask(); });
+
+      // Lazy AudioContext — first interaction anywhere
+      document.body.addEventListener('click', ensureAudio, { once: true });
+
+      // Boot
+      renderStats();
+      renderCalendar();
+      selectDate(new Date()); // auto-open today
+    });
   </script>
 </body>
 </html>
