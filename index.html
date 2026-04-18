@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Daily Flow — a calendar-integrated to-do list that makes every completion feel amazing." />
+  <title>Daily Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    /* CSS — added in next chunk */
+  </style>
+</head>
+<body>
+
+  <!-- Particle burst overlay — covers full viewport, no pointer events -->
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+
+  <!-- Always-visible stats strip at the top -->
+  <header id="stats-bar">
+    <div class="stat" id="stat-streak">
+      <span class="stat-icon" aria-hidden="true">🔥</span>
+      <span class="stat-label">Streak</span>
+      <span class="stat-value" id="streak-value">0</span>
+      <span class="stat-unit">days</span>
+    </div>
+    <div class="stat-divider" aria-hidden="true"></div>
+    <div class="stat" id="stat-today">
+      <span class="stat-icon" aria-hidden="true">✅</span>
+      <span class="stat-label">Today</span>
+      <span class="stat-value" id="today-value">0</span>
+      <span class="stat-unit">done</span>
+    </div>
+    <div class="stat-divider" aria-hidden="true"></div>
+    <div class="stat" id="stat-total">
+      <span class="stat-icon" aria-hidden="true">⚡</span>
+      <span class="stat-label">Total</span>
+      <span class="stat-value" id="total-value">0</span>
+      <span class="stat-unit">completed</span>
+    </div>
+  </header>
+
+  <div id="app-wrapper">
+
+    <!-- App title -->
+    <div id="app-header">
+      <h1 id="app-title">Daily Flow</h1>
+      <p id="app-subtitle">Every task you finish is a win.</p>
+    </div>
+
+    <!-- Tab navigation -->
+    <nav id="tab-bar" role="tablist" aria-label="App sections">
+      <button
+        id="tab-btn-calendar"
+        class="tab-btn active"
+        role="tab"
+        aria-selected="true"
+        aria-controls="tab-calendar"
+        onclick="switchTab('calendar')"
+      >
+        📅 Calendar
+      </button>
+      <button
+        id="tab-btn-quicktasks"
+        class="tab-btn"
+        role="tab"
+        aria-selected="false"
+        aria-controls="tab-quicktasks"
+        onclick="switchTab('quicktasks')"
+      >
+        ⚡ 2-Minute Tasks
+      </button>
+    </nav>
+
+    <!-- ═══════════════════════════════════════════
+         CALENDAR TAB
+    ════════════════════════════════════════════ -->
+    <section
+      id="tab-calendar"
+      class="tab-panel active"
+      role="tabpanel"
+      aria-labelledby="tab-btn-calendar"
+    >
+      <div id="calendar-layout">
+
+        <!-- Calendar card -->
+        <div id="calendar-card">
+          <div id="calendar-header">
+            <button id="cal-prev" aria-label="Previous month">&#8249;</button>
+            <span id="cal-month-label">April 2026</span>
+            <button id="cal-next" aria-label="Next month">&#8250;</button>
+          </div>
+
+          <!-- Day-of-week headers + day cells rendered by JS -->
+          <div id="calendar-grid" role="grid" aria-label="Calendar"></div>
+        </div>
+
+        <!-- Task panel — shown when a date is selected -->
+        <div id="task-panel">
+
+          <!-- Empty state: no date picked yet -->
+          <div id="panel-empty-state">
+            <span class="empty-icon" aria-hidden="true">👆</span>
+            <p>Pick a date to see your tasks</p>
+          </div>
+
+          <!-- Date content (hidden until date is selected) -->
+          <div id="panel-content" hidden>
+
+            <h2 id="panel-date-title">Monday, April 18 2026</h2>
+
+            <!-- Progress bar -->
+            <div id="panel-progress-bar-wrap" aria-hidden="true">
+              <div id="panel-progress-fill"></div>
+            </div>
+            <p id="panel-progress-label">0 of 0 done</p>
+
+            <!-- Add task form -->
+            <form id="panel-add-form" autocomplete="off" onsubmit="return false;">
+              <input
+                id="panel-add-input"
+                type="text"
+                placeholder="Add a task for this day…"
+                maxlength="120"
+                aria-label="New task"
+              />
+              <button id="panel-add-btn" type="button" onclick="addTask()">Add</button>
+            </form>
+
+            <!-- To Do list -->
+            <section class="task-section" id="panel-todo-section">
+              <h3 class="section-heading">To Do</h3>
+              <ul id="panel-todo-list" aria-label="Tasks to do" aria-live="polite"></ul>
+              <p class="list-empty" id="panel-todo-empty" hidden>Nothing here — add a task above!</p>
+            </section>
+
+            <!-- Completed list -->
+            <section class="task-section" id="panel-done-section">
+              <h3 class="section-heading">Completed</h3>
+              <ul id="panel-done-list" aria-label="Completed tasks" aria-live="polite"></ul>
+              <p class="list-empty" id="panel-done-empty" hidden>Complete a task to see it here.</p>
+            </section>
+
+          </div><!-- /panel-content -->
+        </div><!-- /task-panel -->
+
+      </div><!-- /calendar-layout -->
+    </section>
+
+    <!-- ═══════════════════════════════════════════
+         2-MINUTE TASKS TAB
+    ════════════════════════════════════════════ -->
+    <section
+      id="tab-quicktasks"
+      class="tab-panel"
+      role="tabpanel"
+      aria-labelledby="tab-btn-quicktasks"
+      hidden
+    >
+      <div id="quicktasks-layout">
+
+        <div id="quicktasks-header">
+          <h2 id="quicktasks-title">⚡ 2-Minute Tasks</h2>
+          <p id="quicktasks-subtitle">Small wins. Big momentum.</p>
+        </div>
+
+        <!-- Rotating motivational banner -->
+        <div id="motivational-banner" aria-live="polite">
+          If it takes less than 2 minutes — do it now!
+        </div>
+
+        <!-- Add quick task form -->
+        <form id="quick-add-form" autocomplete="off" onsubmit="return false;">
+          <input
+            id="quick-add-input"
+            type="text"
+            placeholder="Quick task…"
+            maxlength="100"
+            aria-label="New quick task"
+          />
+          <button id="quick-add-btn" type="button" onclick="addQuickTask()">Add</button>
+        </form>
+
+        <!-- Quick To Do list -->
+        <section class="task-section" id="quick-todo-section">
+          <h3 class="section-heading">To Do</h3>
+          <ul id="quick-todo-list" aria-label="Quick tasks to do" aria-live="polite"></ul>
+          <p class="list-empty" id="quick-todo-empty" hidden>All clear! Add something above.</p>
+        </section>
+
+        <!-- Quick Completed list -->
+        <section class="task-section" id="quick-done-section">
+          <h3 class="section-heading">Completed</h3>
+          <ul id="quick-done-list" aria-label="Completed quick tasks" aria-live="polite"></ul>
+          <p class="list-empty" id="quick-done-empty" hidden>Completed tasks appear here.</p>
+        </section>
+
+      </div><!-- /quicktasks-layout -->
+    </section>
+
+  </div><!-- /app-wrapper -->
+
+  <!-- Toast notification container (bottom-right, fixed) -->
+  <div id="toast-container" aria-live="assertive" aria-atomic="true"></div>
+
+  <script>
+    // JavaScript — added in next chunk
+  </script>
+</body>
+</html>
